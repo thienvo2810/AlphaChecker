@@ -55,8 +55,14 @@ async function loadTokens() {
     }
 }
 
-// Display tokens in the table
+// Display tokens in both table and mobile card views
 function displayTokens() {
+    displayTokensTable();
+    displayTokensMobile();
+}
+
+// Display tokens in the table (Desktop)
+function displayTokensTable() {
     const tbody = document.getElementById('tokensTableBody');
     
     if (filteredTokens.length === 0) {
@@ -70,7 +76,7 @@ function displayTokens() {
         return;
     }
     
-            tbody.innerHTML = filteredTokens.map(token => `
+    tbody.innerHTML = filteredTokens.map(token => `
         <tr class="token-row" data-symbol="${token.symbol}">
             <td>
                 <strong>${token.symbol}</strong>
@@ -80,8 +86,7 @@ function displayTokens() {
             </td>
             <td>
                 ${token.price_usdt ? 
-                    `<span class="price-value">$${formatPrice(token.price_usdt)}</span>
-                     <i class="fas fa-sync-alt refresh-btn ms-2" onclick="refreshToken('${token.symbol}')" title="Refresh price"></i>` : 
+                    `<span class="price-value">$${formatPrice(token.price_usdt)}</span>` : 
                     'N/A'
                 }
             </td>
@@ -100,8 +105,70 @@ function displayTokens() {
                     'N/A'
                 }
             </td>
-            
         </tr>
+    `).join('');
+}
+
+// Display tokens in mobile card view
+function displayTokensMobile() {
+    const container = document.getElementById('mobileTokensContainer');
+    
+    if (filteredTokens.length === 0) {
+        container.innerHTML = `
+            <div class="text-center text-muted">
+                <i class="fas fa-info-circle me-2"></i>No tokens found
+            </div>
+        `;
+        return;
+    }
+    
+    container.innerHTML = filteredTokens.map(token => `
+        <div class="mobile-card">
+            <div class="token-header">
+                <div>
+                    <div class="token-symbol">$${token.symbol}</div>
+                    ${token.name ? `<div class="token-name">${token.name}</div>` : ''}
+                </div>
+                <div class="text-end">
+                    ${token.price_usdt ? 
+                        `<div class="token-price">$${formatPrice(token.price_usdt)}</div>` : 
+                        '<div class="token-price text-muted">N/A</div>'
+                    }
+                </div>
+            </div>
+            
+            <div class="token-change">
+                ${token.price_change_percent_24h ? formatPriceChange(token.price_change_percent_24h) : '<span class="text-muted">N/A</span>'}
+            </div>
+            
+            <div class="token-stats">
+                <div class="stat-item">
+                    <div class="stat-label">Volume (24h)</div>
+                    <div class="stat-value">${token.volume_24h ? formatVolume(token.volume_24h) : 'N/A'}</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">Market Cap</div>
+                    <div class="stat-value">${token.market_cap ? formatMarketCap(token.market_cap) : 'N/A'}</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">FDV</div>
+                    <div class="stat-value">${token.fdv ? formatMarketCap(token.fdv) : 'N/A'}</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">Total Supply</div>
+                    <div class="stat-value">${token.total_supply ? formatTotalSupply(token.total_supply) : 'N/A'}</div>
+                </div>
+            </div>
+            
+            <div class="futures-status">
+                ${token.is_futures_listed === 1 ? 
+                    '<span class="badge bg-success futures-badge"><i class="fas fa-check me-1"></i>Futures Listed</span>' : 
+                    token.is_futures_listed === 0 ? 
+                    '<span class="badge bg-secondary futures-badge"><i class="fas fa-times me-1"></i>Not Listed</span>' :
+                    '<span class="badge bg-warning futures-badge">N/A</span>'
+                }
+            </div>
+        </div>
     `).join('');
 }
 
@@ -246,9 +313,12 @@ function refreshData() {
 // Refresh specific token
 async function refreshToken(symbol) {
     try {
-        const row = document.querySelector(`tr[data-symbol="${symbol}"]`);
-        if (row) {
-            row.classList.add('loading');
+        // Add loading state to both desktop table row and mobile card
+        const tableRow = document.querySelector(`tr[data-symbol="${symbol}"]`);
+        const mobileCard = document.querySelector(`.mobile-card:has(.token-symbol:contains('$${symbol}'))`);
+        
+        if (tableRow) {
+            tableRow.classList.add('loading');
         }
         
         // For now, just reload all tokens since we don't have individual token update endpoint
@@ -258,9 +328,9 @@ async function refreshToken(symbol) {
         console.error('Error refreshing token:', error);
         showError(`Failed to refresh ${symbol}`);
     } finally {
-        const row = document.querySelector(`tr[data-symbol="${symbol}"]`);
-        if (row) {
-            row.classList.remove('loading');
+        const tableRow = document.querySelector(`tr[data-symbol="${symbol}"]`);
+        if (tableRow) {
+            tableRow.classList.remove('loading');
         }
     }
 }
@@ -439,10 +509,15 @@ function stopAutoRefresh() {
 function toggleAutoRefresh() {
     autoRefreshEnabled = !autoRefreshEnabled;
     
-    // Update checkbox state
-    const checkbox = document.getElementById('autoRefreshToggle');
-    if (checkbox) {
-        checkbox.checked = autoRefreshEnabled;
+    // Update checkbox state for both desktop and mobile
+    const desktopCheckbox = document.getElementById('autoRefreshToggle');
+    const mobileCheckbox = document.getElementById('autoRefreshToggleMobile');
+    
+    if (desktopCheckbox) {
+        desktopCheckbox.checked = autoRefreshEnabled;
+    }
+    if (mobileCheckbox) {
+        mobileCheckbox.checked = autoRefreshEnabled;
     }
     
     if (autoRefreshEnabled) {
@@ -521,6 +596,7 @@ async function loadTokenLiveData(symbol, row, silent = false) {
 function showAllTokens() {
     filteredTokens = [...allTokens];
     currentFilter = 'all';
+    resetSortState();
     displayTokens();
     updateStats();
     updateFilterButtons('all');
@@ -530,6 +606,7 @@ function showAllTokens() {
 function showFuturesListed() {
     filteredTokens = allTokens.filter(token => token.is_futures_listed === 1);
     currentFilter = 'futures_listed';
+    resetSortState();
     displayTokens();
     updateStats();
     updateFilterButtons('futures_listed');
@@ -539,34 +616,127 @@ function showFuturesListed() {
 function showNotFuturesListed() {
     filteredTokens = allTokens.filter(token => token.is_futures_listed === 0);
     currentFilter = 'not_futures_listed';
+    resetSortState();
     displayTokens();
     updateStats();
     updateFilterButtons('not_futures_listed');
 }
 
+// Reset sort state when changing filters
+function resetSortState() {
+    isSortedByMarketCap = false;
+    originalOrder = [];
+    updateSortCapButton(false);
+}
+
+// Simple sort by Market Cap (low to high) with toggle
+let isSortedByMarketCap = false;
+let originalOrder = [];
+
+function sortByMarketCap() {
+    if (!isSortedByMarketCap) {
+        // Save original order if first time sorting
+        if (originalOrder.length === 0) {
+            originalOrder = [...filteredTokens];
+        }
+        
+        // Sort by Market Cap (low to high)
+        filteredTokens.sort((a, b) => {
+            const marketCapA = a.market_cap || 0;
+            const marketCapB = b.market_cap || 0;
+            return marketCapA - marketCapB;
+        });
+        
+        isSortedByMarketCap = true;
+        updateSortCapButton(true);
+    } else {
+        // Restore original order
+        filteredTokens = [...originalOrder];
+        isSortedByMarketCap = false;
+        updateSortCapButton(false);
+    }
+    
+    displayTokens();
+}
+
+// Update SortCap button appearance
+function updateSortCapButton(isActive) {
+    const btnSortCap = document.getElementById('btnSortCap');
+    const btnSortCapMobile = document.getElementById('btnSortCapMobile');
+    
+    if (btnSortCap) {
+        if (isActive) {
+            btnSortCap.classList.add('active');
+            btnSortCap.innerHTML = '<i class="fas fa-sort-amount-down me-1"></i>SortCap';
+        } else {
+            btnSortCap.classList.remove('active');
+            btnSortCap.innerHTML = '<i class="fas fa-sort-amount-up me-1"></i>SortCap';
+        }
+    }
+    
+    if (btnSortCapMobile) {
+        if (isActive) {
+            btnSortCapMobile.classList.add('active');
+            btnSortCapMobile.innerHTML = '<i class="fas fa-sort-amount-down me-1"></i>SortCap';
+        } else {
+            btnSortCapMobile.classList.remove('active');
+            btnSortCapMobile.innerHTML = '<i class="fas fa-sort-amount-up me-1"></i>SortCap';
+        }
+    }
+}
+
 // Update filter button states
 function updateFilterButtons(activeFilter) {
-    // Reset all buttons
-    document.getElementById('btnShowAll').classList.remove('btn-primary');
-    document.getElementById('btnShowAll').classList.add('btn-outline-primary');
-    document.getElementById('btnFuturesListed').classList.remove('btn-success');
-    document.getElementById('btnFuturesListed').classList.add('btn-outline-success');
-    document.getElementById('btnNotFuturesListed').classList.remove('btn-secondary');
-    document.getElementById('btnNotFuturesListed').classList.add('btn-outline-secondary');
+    // Reset all desktop buttons
+    const btnShowAll = document.getElementById('btnShowAll');
+    const btnFuturesListed = document.getElementById('btnFuturesListed');
+    const btnNotFuturesListed = document.getElementById('btnNotFuturesListed');
     
-    // Activate the selected button
+    // Reset all mobile buttons
+    const btnShowAllMobile = document.getElementById('btnShowAllMobile');
+    const btnFuturesListedMobile = document.getElementById('btnFuturesListedMobile');
+    const btnNotFuturesListedMobile = document.getElementById('btnNotFuturesListedMobile');
+    
+    // Reset all buttons to outline style
+    [btnShowAll, btnFuturesListed, btnNotFuturesListed, 
+     btnShowAllMobile, btnFuturesListedMobile, btnNotFuturesListedMobile].forEach(btn => {
+        if (btn) {
+            btn.classList.remove('btn-primary', 'btn-success', 'btn-secondary');
+            btn.classList.add('btn-outline-primary', 'btn-outline-success', 'btn-outline-secondary');
+        }
+    });
+    
+    // Activate the selected button on both desktop and mobile
     switch(activeFilter) {
         case 'all':
-            document.getElementById('btnShowAll').classList.remove('btn-outline-primary');
-            document.getElementById('btnShowAll').classList.add('btn-primary');
+            if (btnShowAll) {
+                btnShowAll.classList.remove('btn-outline-primary');
+                btnShowAll.classList.add('btn-primary');
+            }
+            if (btnShowAllMobile) {
+                btnShowAllMobile.classList.remove('btn-outline-primary');
+                btnShowAllMobile.classList.add('btn-primary');
+            }
             break;
         case 'futures_listed':
-            document.getElementById('btnFuturesListed').classList.remove('btn-outline-success');
-            document.getElementById('btnFuturesListed').classList.add('btn-success');
+            if (btnFuturesListed) {
+                btnFuturesListed.classList.remove('btn-outline-success');
+                btnFuturesListed.classList.add('btn-success');
+            }
+            if (btnFuturesListedMobile) {
+                btnFuturesListedMobile.classList.remove('btn-outline-success');
+                btnFuturesListedMobile.classList.add('btn-success');
+            }
             break;
         case 'not_futures_listed':
-            document.getElementById('btnNotFuturesListed').classList.remove('btn-outline-secondary');
-            document.getElementById('btnNotFuturesListed').classList.add('btn-secondary');
+            if (btnNotFuturesListed) {
+                btnNotFuturesListed.classList.remove('btn-outline-secondary');
+                btnNotFuturesListed.classList.add('btn-secondary');
+            }
+            if (btnNotFuturesListedMobile) {
+                btnNotFuturesListedMobile.classList.remove('btn-outline-secondary');
+                btnNotFuturesListedMobile.classList.add('btn-secondary');
+            }
             break;
     }
 }
