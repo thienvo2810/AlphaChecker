@@ -98,7 +98,12 @@ router.get('/:symbol/price', async (req, res) => {
 router.get('/:symbol/futures', async (req, res) => {
   try {
     const { symbol } = req.params;
+    console.log(`🚀 Futures API called for symbol: ${symbol}`);
+    
+    console.log(`🔍 Calling binanceService.checkFuturesAvailability(${symbol})...`);
     const futuresData = await binanceService.checkFuturesAvailability(symbol);
+    
+    console.log(`📊 Futures data received for ${symbol}:`, futuresData);
     
     res.json({
       success: true,
