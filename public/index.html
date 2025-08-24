@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AlphaChecker - Binance Alpha Token Tracker</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        .token-card {
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .token-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+        .price-up {
+            color: #28a745;
+        }
+        .price-down {
+            color: #dc3545;
+        }
+        .futures-badge {
+            font-size: 0.8em;
+        }
+        .loading {
+            opacity: 0.6;
+        }
+        .refresh-btn {
+            cursor: pointer;
+        }
+        .refresh-btn:hover {
+            color: #007bff;
+        }
+        .search-box {
+            max-width: 400px;
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+        <div class="container">
+            <a class="navbar-brand" href="#">
+                <i class="fas fa-chart-line me-2"></i>
+                AlphaChecker
+            </a>
+            <div class="navbar-nav ms-auto">
+                <span class="navbar-text">
+                    <i class="fas fa-clock me-1"></i>
+                    <span id="lastUpdate">Never</span>
+                </span>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container mt-4">
+        <!-- Header Section -->
+        <div class="row mb-4">
+            <div class="col-md-8">
+                <h1><i class="fas fa-coins me-2"></i>Alpha Token Dashboard</h1>
+            </div>
+            <div class="col-md-4 text-end">
+                <small class="text-muted">
+                    Made by <strong>Fudder</strong>
+                </small>
+            </div>
+        </div>
+
+        <!-- Search Section -->
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="input-group search-box">
+                    <input type="text" class="form-control" id="searchInput" placeholder="Search tokens...">
+                    <button class="btn btn-outline-secondary" type="button" onclick="searchTokens()">
+                        <i class="fas fa-search"></i>
+                    </button>
+                    <button class="btn btn-outline-secondary" type="button" onclick="clearSearch()" title="Clear search">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Stats Cards -->
+        <div class="row mb-4">
+            <div class="col-md-3">
+                <div class="card text-center">
+                    <div class="card-body">
+                        <h5 class="card-title text-primary">Total Tokens</h5>
+                        <h3 id="totalTokens">-</h3>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card text-center">
+                    <div class="card-body">
+                        <h5 class="card-title text-success">Futures Listed</h5>
+                        <h3 id="futuresCount">-</h3>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tokens Table -->
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">
+                    <i class="fas fa-table me-2"></i>Alpha Tokens
+                </h5>
+                <div class="d-flex align-items-center">
+                    <div class="btn-group me-3" role="group">
+                        <button type="button" class="btn btn-outline-primary" onclick="showAllTokens()" id="btnShowAll">
+                            <i class="fas fa-list me-1"></i>All
+                        </button>
+                        <button type="button" class="btn btn-outline-success" onclick="showFuturesListed()" id="btnFuturesListed">
+                            <i class="fas fa-check me-1"></i>Futures Listed
+                        </button>
+                        <button type="button" class="btn btn-outline-secondary" onclick="showNotFuturesListed()" id="btnNotFuturesListed">
+                            <i class="fas fa-times me-1"></i>Not Listed
+                        </button>
+                    </div>
+                    <div class="form-check form-switch d-inline-block me-3">
+                        <input class="form-check-input" type="checkbox" id="autoRefreshToggle" onchange="toggleAutoRefresh()" checked>
+                        <label class="form-check-label" for="autoRefreshToggle">
+                            <i class="fas fa-clock me-1"></i>Auto-Refresh (2min)
+                        </label>
+                    </div>
+                    <button type="button" class="btn btn-outline-secondary" onclick="refreshData()">
+                        <i class="fas fa-sync-alt me-1"></i>Refresh
+                    </button>
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-hover">
+                        <thead>
+                            <tr>
+                                <th>Symbol</th>
+                                <th>Price (USDT)</th>
+                                <th>24h Change</th>
+                                <th>Volume (24h)</th>
+                                <th>Market Cap</th>
+                                <th>FDV</th>
+                                <th>Total Supply</th>
+                                <th>Futures</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tokensTableBody">
+                            <tr>
+                                <td colspan="8" class="text-center text-muted">
+                                    <i class="fas fa-spinner fa-spin me-2"></i>Loading tokens...
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        
+
+    </div>
+
+
+
+    <!-- Token Details Modal -->
+    <div class="modal fade" id="tokenDetailsModal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="tokenDetailsTitle">Token Details</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body" id="tokenDetailsBody">
+                    <!-- Token details will be loaded here -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="js/dashboard.js"></script>
+</body>
+</html> 

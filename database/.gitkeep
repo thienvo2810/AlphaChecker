@@ -1,0 +1,2 @@
+# This file ensures the database directory is tracked in git
+# The actual database file will be created when the application runs 
