@@ -83,6 +83,8 @@ class BinanceService {
   // Check if futures are available for a symbol - CẢI TIẾN VỚI RETRY LOGIC
   async checkFuturesAvailability(symbol) {
     try {
+      console.log(`🚀 Starting futures check for ${symbol}...`);
+      
       // Rate limiting protection - delay giữa các requests
       if (this.lastRequestTime) {
         const timeSinceLastRequest = Date.now() - this.lastRequestTime;
@@ -94,25 +96,51 @@ class BinanceService {
 
       // Sử dụng retry logic
       const response = await this.retryRequest(async () => {
-        console.log(`🔍 Checking futures for ${symbol}...`);
-        return await axios.get(`${this.futuresURL}/fapi/v1/exchangeInfo`, this.axiosConfig);
+        console.log(`🔍 Attempting futures API call for ${symbol}...`);
+        const result = await axios.get(`${this.futuresURL}/fapi/v1/exchangeInfo`, this.axiosConfig);
+        console.log(`📡 Raw response received for ${symbol}:`, {
+          status: result.status,
+          dataLength: result.data?.symbols?.length || 'NO_SYMBOLS',
+          hasData: !!result.data,
+          hasSymbols: !!result.data?.symbols
+        });
+        return result;
       });
 
       // Validate response
       if (!response || !response.data || !response.data.symbols) {
-        console.error(`❌ Invalid response structure for ${symbol} futures check`);
+        console.error(`❌ Invalid response structure for ${symbol} futures check:`, {
+          hasResponse: !!response,
+          hasData: !!response?.data,
+          hasSymbols: !!response?.data?.symbols,
+          responseKeys: response?.data ? Object.keys(response.data) : 'NO_DATA'
+        });
         return this.getDefaultFuturesResponse(symbol, 'INVALID_RESPONSE');
       }
 
+      console.log(`🔍 Searching for ${symbol}USDT in ${response.data.symbols.length} symbols...`);
+      
       const symbolInfo = response.data.symbols.find(s => s.symbol === symbol + 'USDT');
       
       if (symbolInfo) {
-        console.log(`✅ ${symbol} futures found: ${symbolInfo.status}`);
+        console.log(`✅ ${symbol} futures found:`, {
+          symbol: symbolInfo.symbol,
+          status: symbolInfo.status,
+          contractType: symbolInfo.contractType,
+          onboardDate: symbolInfo.onboardDate
+        });
       } else {
-        console.log(`ℹ️ ${symbol} futures not found`);
+        console.log(`ℹ️ ${symbol} futures not found - checking if it exists in response...`);
+        
+        // Debug: Check if symbol exists with different case
+        const allSymbols = response.data.symbols.map(s => s.symbol);
+        const similarSymbols = allSymbols.filter(s => s.includes(symbol.toUpperCase()) || s.includes(symbol.toLowerCase()));
+        if (similarSymbols.length > 0) {
+          console.log(`🔍 Found similar symbols:`, similarSymbols.slice(0, 5));
+        }
       }
 
-      return {
+      const result = {
         isAvailable: !!symbolInfo,
         symbol: symbol + 'USDT',
         status: symbolInfo ? symbolInfo.status : 'NOT_FOUND',
@@ -123,6 +151,9 @@ class BinanceService {
         pricePrecision: symbolInfo ? symbolInfo.pricePrecision : null,
         quantityPrecision: symbolInfo ? symbolInfo.quantityPrecision : null
       };
+
+      console.log(`📊 Final result for ${symbol}:`, result);
+      return result;
 
     } catch (error) {
       console.error(`❌ Error checking futures availability for ${symbol}:`, error.message);
@@ -143,7 +174,9 @@ class BinanceService {
         console.error(`   Error setting up request:`, error.message);
       }
 
-      return this.getDefaultFuturesResponse(symbol, 'ERROR');
+      const errorResult = this.getDefaultFuturesResponse(symbol, 'ERROR');
+      console.log(`🚨 Returning error result for ${symbol}:`, errorResult);
+      return errorResult;
     }
   }
 
