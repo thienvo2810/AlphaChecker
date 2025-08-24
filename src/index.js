@@ -19,12 +19,13 @@ app.use(express.static(path.join(__dirname, '../public')));
 // Routes
 app.use('/api/tokens', tokenRoutes);
 
-// Health check endpoint
-app.get('/health', (req, res) => {
+// Health check endpoint for Render
+app.get('/healthz', (req, res) => {
   res.json({ 
     status: 'OK', 
     timestamp: new Date().toISOString(),
-    uptime: process.uptime()
+    uptime: process.uptime(),
+    service: 'Alpha Token Dashboard'
   });
 });
 
