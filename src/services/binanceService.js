@@ -7,13 +7,45 @@ class BinanceService {
     this.alphaURL = 'https://www.binance.com';
     this.apiKey = process.env.BINANCE_API_KEY;
     this.secretKey = process.env.BINANCE_SECRET_KEY;
+    
+    // Cải tiến axios configuration cho production
+    this.axiosConfig = {
+      timeout: 30000, // 30 seconds timeout
+      headers: {
+        'User-Agent': 'AlphaChecker/1.0.0',
+        'Accept': 'application/json'
+      },
+      // Retry configuration
+      retry: 3,
+      retryDelay: 1000
+    };
+  }
+
+  // Helper function để retry requests
+  async retryRequest(requestFn, maxRetries = 3, delay = 1000) {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        return await requestFn();
+      } catch (error) {
+        if (attempt === maxRetries) {
+          throw error;
+        }
+        
+        // Log retry attempt
+        console.log(`🔄 Retry attempt ${attempt}/${maxRetries} for futures API...`);
+        
+        // Wait before retry
+        await new Promise(resolve => setTimeout(resolve, delay * attempt));
+      }
+    }
   }
 
   // Get 24hr ticker for a symbol
   async get24hrTicker(symbol) {
     try {
       const response = await axios.get(`${this.baseURL}/api/v3/ticker/24hr`, {
-        params: { symbol: symbol + 'USDT' }
+        params: { symbol: symbol + 'USDT' },
+        ...this.axiosConfig
       });
       return response.data;
     } catch (error) {
@@ -26,7 +58,8 @@ class BinanceService {
   async getCurrentPrice(symbol) {
     try {
       const response = await axios.get(`${this.baseURL}/api/v3/ticker/price`, {
-        params: { symbol: symbol + 'USDT' }
+        params: { symbol: symbol + 'USDT' },
+        ...this.axiosConfig
       });
       return response.data;
     } catch (error) {
@@ -38,7 +71,7 @@ class BinanceService {
   // Get exchange info for a symbol
   async getExchangeInfo(symbol) {
     try {
-      const response = await axios.get(`${this.baseURL}/api/v3/exchangeInfo`);
+      const response = await axios.get(`${this.baseURL}/api/v3/exchangeInfo`, this.axiosConfig);
       const symbolInfo = response.data.symbols.find(s => s.symbol === symbol + 'USDT');
       return symbolInfo;
     } catch (error) {
@@ -47,11 +80,38 @@ class BinanceService {
     }
   }
 
-  // Check if futures are available for a symbol
+  // Check if futures are available for a symbol - CẢI TIẾN VỚI RETRY LOGIC
   async checkFuturesAvailability(symbol) {
     try {
-      const response = await axios.get(`${this.futuresURL}/fapi/v1/exchangeInfo`);
+      // Rate limiting protection - delay giữa các requests
+      if (this.lastRequestTime) {
+        const timeSinceLastRequest = Date.now() - this.lastRequestTime;
+        if (timeSinceLastRequest < 100) { // Minimum 100ms between requests
+          await new Promise(resolve => setTimeout(resolve, 100 - timeSinceLastRequest));
+        }
+      }
+      this.lastRequestTime = Date.now();
+
+      // Sử dụng retry logic
+      const response = await this.retryRequest(async () => {
+        console.log(`🔍 Checking futures for ${symbol}...`);
+        return await axios.get(`${this.futuresURL}/fapi/v1/exchangeInfo`, this.axiosConfig);
+      });
+
+      // Validate response
+      if (!response || !response.data || !response.data.symbols) {
+        console.error(`❌ Invalid response structure for ${symbol} futures check`);
+        return this.getDefaultFuturesResponse(symbol, 'INVALID_RESPONSE');
+      }
+
       const symbolInfo = response.data.symbols.find(s => s.symbol === symbol + 'USDT');
+      
+      if (symbolInfo) {
+        console.log(`✅ ${symbol} futures found: ${symbolInfo.status}`);
+      } else {
+        console.log(`ℹ️ ${symbol} futures not found`);
+      }
+
       return {
         isAvailable: !!symbolInfo,
         symbol: symbol + 'USDT',
@@ -63,20 +123,43 @@ class BinanceService {
         pricePrecision: symbolInfo ? symbolInfo.pricePrecision : null,
         quantityPrecision: symbolInfo ? symbolInfo.quantityPrecision : null
       };
+
     } catch (error) {
       console.error(`❌ Error checking futures availability for ${symbol}:`, error.message);
-      return {
-        isAvailable: false,
-        symbol: symbol + 'USDT',
-        status: 'ERROR',
-        contractType: null,
-        listingDate: null,
-        baseAsset: null,
-        quoteAsset: null,
-        pricePrecision: null,
-        quantityPrecision: null
-      };
+      
+      // Log detailed error info
+      if (error.response) {
+        console.error(`   Status: ${error.response.status}`);
+        console.error(`   Data:`, error.response.data);
+        
+        // Handle specific error codes
+        if (error.response.status === 429) {
+          console.log(`   ⚠️ Rate limited - waiting before retry...`);
+          await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds
+        }
+      } else if (error.request) {
+        console.error(`   Request made but no response received`);
+      } else {
+        console.error(`   Error setting up request:`, error.message);
+      }
+
+      return this.getDefaultFuturesResponse(symbol, 'ERROR');
     }
+  }
+
+  // Helper function để tạo default response
+  getDefaultFuturesResponse(symbol, status) {
+    return {
+      isAvailable: false,
+      symbol: symbol + 'USDT',
+      status: status,
+      contractType: null,
+      listingDate: null,
+      baseAsset: null,
+      quoteAsset: null,
+      pricePrecision: null,
+      quantityPrecision: null
+    };
   }
 
   // Get futures account trade list (requires authentication)
