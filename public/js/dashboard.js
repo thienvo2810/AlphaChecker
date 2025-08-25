@@ -126,7 +126,7 @@ function displayTokensMobile() {
         <div class="mobile-card">
             <div class="token-header">
                 <div>
-                    <div class="token-symbol">$${token.symbol}</div>
+                    <div class="token-symbol">${token.symbol}</div>
                     ${token.name ? `<div class="token-name">${token.name}</div>` : ''}
                 </div>
                 <div class="text-end">
