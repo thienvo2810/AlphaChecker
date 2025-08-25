@@ -98,17 +98,35 @@ router.get('/:symbol/price', async (req, res) => {
 router.get('/:symbol/futures', async (req, res) => {
   try {
     const { symbol } = req.params;
-    console.log(`🚀 Futures API called for symbol: ${symbol}`);
+    const { name } = req.query; // Get token name from query parameter
     
-    console.log(`🔍 Calling binanceService.checkFuturesAvailability(${symbol})...`);
-    const futuresData = await binanceService.checkFuturesAvailability(symbol);
+    console.log(`🚀 Enhanced Futures API called for symbol: ${symbol}, name: ${name}`);
     
-    console.log(`📊 Futures data received for ${symbol}:`, futuresData);
+    if (!name) {
+      console.log(`⚠️ No token name provided for ${symbol}, using basic futures check`);
+      const futuresData = await binanceService.checkFuturesAvailability(symbol);
+      
+      console.log(`📊 Basic futures data received for ${symbol}:`, futuresData);
+      
+      res.json({
+        success: true,
+        data: futuresData,
+        timestamp: new Date().toISOString(),
+        note: 'Basic check - no name verification performed'
+      });
+      return;
+    }
+    
+    console.log(`🔍 Calling enhanced futures check with verification for ${symbol} (${name})...`);
+    const futuresData = await tokenInfoService.checkFuturesStatusWithVerification(symbol, name);
+    
+    console.log(`📊 Enhanced futures data received for ${symbol}:`, futuresData);
     
     res.json({
       success: true,
-      data: futuresData,
-      timestamp: new Date().toISOString()
+        data: futuresData,
+        timestamp: new Date().toISOString(),
+        verification: futuresData.verificationStatus
     });
   } catch (error) {
     console.error(`❌ Error checking futures for ${req.params.symbol}:`, error.message);

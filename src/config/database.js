@@ -91,7 +91,8 @@ async function initializeDatabase() {
         notes TEXT,
         is_futures_listed BOOLEAN,
         futures_check_date DATETIME,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )
     `;
 

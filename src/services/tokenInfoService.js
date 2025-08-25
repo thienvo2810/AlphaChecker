@@ -505,11 +505,24 @@ class TokenInfoService {
           // Process batch concurrently
           const batchPromises = batch.map(async (token) => {
             try {
-              // Check futures status
-              const futuresData = await this.checkBasicFuturesStatus(token.symbol);
+              // Check futures status with double verification if name is available
+              let futuresData;
+              if (token.name) {
+                console.log(`🔍 Using enhanced verification for ${token.symbol} (${token.name})`);
+                futuresData = await this.checkFuturesStatusWithVerification(token.symbol, token.name);
+              } else {
+                console.log(`⚠️ No name available for ${token.symbol}, using basic check`);
+                futuresData = await this.checkBasicFuturesStatus(token.symbol);
+              }
               
               // Save to database for future cache
-              await this.saveFuturesStatus(token.symbol, futuresData.isAvailable);
+              if (futuresData.verificationStatus) {
+                // Enhanced verification result
+                await this.saveFuturesStatusWithVerification(token.symbol, futuresData.isAvailable, futuresData.verificationDetails);
+              } else {
+                // Basic check result
+                await this.saveFuturesStatus(token.symbol, futuresData.isAvailable);
+              }
               
               return {
                 ...token,
@@ -879,6 +892,240 @@ class TokenInfoService {
       return [];
     }
   }
+
+  // Enhanced futures checking with double verification
+  async checkFuturesStatusWithVerification(symbol, name) {
+    try {
+      console.log(`🔍 Starting enhanced futures check for ${symbol} (${name})...`);
+      
+      // Clean symbol by removing $ prefix if present
+      const cleanSymbol = symbol.replace(/^\$/, '');
+      console.log(`🧹 Cleaned symbol: ${symbol} -> ${cleanSymbol}`);
+      
+      // Get alpha token from database (try both with and without $)
+      let alphaToken = await this.getAlphaTokenFromDB(cleanSymbol);
+      if (!alphaToken && symbol !== cleanSymbol) {
+        alphaToken = await this.getAlphaTokenFromDB(symbol);
+      }
+      
+      if (!alphaToken) {
+        console.log(`❌ Alpha token not found for ${symbol} or ${cleanSymbol}`);
+        return {
+          isAvailable: false,
+          verificationStatus: 'NO_ALPHA_TOKEN',
+          reason: 'Token not found in alpha_tokens table',
+          attemptedSymbols: [symbol, cleanSymbol]
+        };
+      }
+      
+      console.log(`✅ Found alpha token: ${alphaToken.symbol} | ${alphaToken.name}`);
+      
+      // Check Binance Futures API with cleaned symbol
+      const futuresData = await binanceService.checkFuturesAvailability(cleanSymbol);
+      
+      // Double verification logic
+      const symbolMatch = alphaToken.symbol === cleanSymbol || alphaToken.symbol === symbol;
+      const nameMatch = alphaToken.name && 
+                       alphaToken.name.toLowerCase() === name.toLowerCase();
+      
+      console.log(`🔍 Verification results for ${symbol}:`);
+      console.log(`  - Alpha token: ${alphaToken.symbol} | ${alphaToken.name}`);
+      console.log(`  - Requested: ${symbol} | ${name}`);
+      console.log(`  - Cleaned symbol: ${cleanSymbol}`);
+      console.log(`  - Symbol match: ${symbolMatch}`);
+      console.log(`  - Name match: ${nameMatch}`);
+      console.log(`  - Futures API: ${futuresData.isAvailable}`);
+      
+      // Enhanced verification: Check if this is likely the same token
+      let isLikelySameToken = symbolMatch;
+      
+      // If name doesn't match but symbol does, this might be a different token with same symbol
+      if (symbolMatch && !nameMatch) {
+        console.log(`⚠️ Symbol matches but name doesn't - potential different token`);
+        console.log(`   Alpha: ${alphaToken.name} vs Requested: ${name}`);
+        
+        // Additional check: if futures is available, this might be a different RIF token
+        if (futuresData.isAvailable) {
+          console.log(`⚠️ WARNING: Futures available but name mismatch - likely different token!`);
+          isLikelySameToken = false;
+        }
+      }
+      
+      // Adjusted verification logic: 
+      // 1. If name is available, require both symbol and name match
+      // 2. If name is not available, only require symbol match
+      // 3. Always require futures API to confirm availability
+      let verificationPassed = false;
+      
+      if (name && alphaToken.name) {
+        // Both names available - require strict matching
+        verificationPassed = symbolMatch && nameMatch && futuresData.isAvailable;
+        console.log(`🔍 Strict verification: Symbol(${symbolMatch}) + Name(${nameMatch}) + Futures(${futuresData.isAvailable}) = ${verificationPassed}`);
+      } else {
+        // Name not available - only require symbol match
+        verificationPassed = symbolMatch && futuresData.isAvailable;
+        console.log(`🔍 Relaxed verification: Symbol(${symbolMatch}) + Futures(${futuresData.isAvailable}) = ${verificationPassed}`);
+        console.log(`   Note: Name verification skipped (Alpha: ${!!alphaToken.name}, Requested: ${!!name})`);
+      }
+      
+      // Only confirm if verification passed
+      if (verificationPassed) {
+        console.log(`✅ Double verification PASSED for ${symbol}`);
+        
+        // Save verified futures status
+        await this.saveFuturesStatusWithVerification(cleanSymbol, true, {
+          symbolMatch,
+          nameMatch,
+          alphaTokenSymbol: alphaToken.symbol,
+          alphaTokenName: alphaToken.name,
+          originalSymbol: symbol,
+          cleanedSymbol: cleanSymbol,
+          isLikelySameToken,
+          verificationMode: name && alphaToken.name ? 'STRICT' : 'RELAXED'
+        });
+        
+        return {
+          isAvailable: true,
+          verificationStatus: 'VERIFIED',
+          alphaTokenName: alphaToken.name,
+          futuresApiStatus: futuresData.isAvailable,
+          verificationDetails: {
+            symbolMatch,
+            nameMatch,
+            alphaTokenSymbol: alphaToken.symbol,
+            alphaTokenName: alphaToken.name,
+            originalSymbol: symbol,
+            cleanedSymbol: cleanSymbol,
+            isLikelySameToken,
+            verificationMode: name && alphaToken.name ? 'STRICT' : 'RELAXED'
+          }
+        };
+      } else {
+        console.log(`❌ Double verification FAILED for ${symbol}`);
+        
+        // Save failed verification status
+        await this.saveFuturesStatusWithVerification(cleanSymbol, false, {
+          symbolMatch,
+          nameMatch,
+          alphaTokenSymbol: alphaToken.symbol,
+          alphaTokenName: alphaToken.name,
+          originalSymbol: symbol,
+          cleanedSymbol: cleanSymbol,
+          isLikelySameToken,
+          reason: `Verification failed - Symbol: ${symbolMatch}, Name: ${nameMatch}, Futures: ${futuresData.isAvailable}, Same token: ${isLikelySameToken}`,
+          verificationMode: name && alphaToken.name ? 'STRICT' : 'RELAXED'
+        });
+        
+        return {
+          isAvailable: false,
+          verificationStatus: 'FAILED',
+          reason: `Verification failed - Symbol: ${symbolMatch}, Name: ${nameMatch}, Futures: ${futuresData.isAvailable}, Same token: ${isLikelySameToken}`,
+          alphaTokenName: alphaToken.name,
+          futuresApiStatus: futuresData.isAvailable,
+          verificationDetails: {
+            symbolMatch,
+            nameMatch,
+            alphaTokenSymbol: alphaToken.symbol,
+            alphaTokenName: alphaToken.name,
+            originalSymbol: symbol,
+            cleanedSymbol: cleanSymbol,
+            isLikelySameToken,
+            verificationMode: name && alphaToken.name ? 'STRICT' : 'RELAXED'
+          }
+        };
+      }
+      
+    } catch (error) {
+      console.error(`❌ Error in enhanced futures check for ${symbol}:`, error.message);
+      return {
+        isAvailable: false,
+        verificationStatus: 'ERROR',
+        reason: error.message
+      };
+    }
+  }
+
+  // Enhanced save futures status with verification details
+  async saveFuturesStatusWithVerification(symbol, isFuturesListed, verificationDetails = {}) {
+    try {
+      const database = getDatabase();
+      const query = `
+        INSERT OR REPLACE INTO alpha_tokens 
+        (symbol, is_futures_listed, futures_check_date, updated_at)
+        VALUES (?, ?, ?, ?)
+      `;
+      
+      const now = new Date().toISOString();
+      
+      database.run(query, [symbol, isFuturesListed, now, now], function(err) {
+        if (err) {
+          console.warn(`⚠️ Failed to save futures status for ${symbol}:`, err.message);
+        } else {
+          console.log(`✅ Saved enhanced futures status for ${symbol}: ${isFuturesListed}`);
+          console.log(`📊 Verification details:`, verificationDetails);
+        }
+      });
+      
+    } catch (error) {
+      console.error(`❌ Error saving enhanced futures status for ${symbol}:`, error.message);
+    }
+  }
+
+  // Enhanced function to get alpha token from database
+  async getAlphaTokenFromDB(symbol) {
+    return new Promise((resolve, reject) => {
+      const database = getDatabase();
+      
+      // Try multiple search strategies
+      const queries = [
+        // Exact match
+        `SELECT symbol, name, is_futures_listed, futures_check_date, created_at
+         FROM alpha_tokens 
+         WHERE symbol = ? AND is_active = 1`,
+        
+        // Case insensitive match
+        `SELECT symbol, name, is_futures_listed, futures_check_date, created_at
+         FROM alpha_tokens 
+         WHERE UPPER(symbol) = UPPER(?) AND is_active = 1`,
+        
+        // Partial match (for cases where symbol might be truncated)
+        `SELECT symbol, name, is_futures_listed, futures_check_date, created_at
+         FROM alpha_tokens 
+         WHERE symbol LIKE ? AND is_active = 1`
+      ];
+      
+      const searchTerms = [symbol, symbol, `%${symbol}%`];
+      
+      // Try each query strategy
+      const tryQuery = (index) => {
+        if (index >= queries.length) {
+          console.log(`❌ Alpha token not found after trying all strategies: ${symbol}`);
+          resolve(null);
+          return;
+        }
+        
+        database.get(queries[index], [searchTerms[index]], (err, row) => {
+          if (err) {
+            console.error(`❌ Database error with query ${index + 1} for ${symbol}:`, err.message);
+            // Try next strategy
+            tryQuery(index + 1);
+            return;
+          }
+          
+          if (row) {
+            console.log(`✅ Found alpha token with strategy ${index + 1}: ${row.symbol} | ${row.name}`);
+            resolve(row);
+          } else {
+            // Try next strategy
+            tryQuery(index + 1);
+          }
+        });
+      };
+      
+      // Start with first strategy
+      tryQuery(0);
+    });
+  }
 }
 
 const tokenInfoService = new TokenInfoService();
@@ -896,5 +1143,7 @@ module.exports = {
   getTokenDetails: (symbol) => tokenInfoService.getTokenDetails(symbol),
   searchTokens: (query, limit) => tokenInfoService.searchTokens(query, limit),
   getTokenLiveData: (symbol) => tokenInfoService.getTokenLiveData(symbol),
-  saveFuturesStatus: (symbol, isFuturesListed) => tokenInfoService.saveFuturesStatus(symbol, isFuturesListed)
+  saveFuturesStatus: (symbol, isFuturesListed) => tokenInfoService.saveFuturesStatus(symbol, isFuturesListed),
+  saveFuturesStatusWithVerification: (symbol, isFuturesListed, verificationDetails) => tokenInfoService.saveFuturesStatusWithVerification(symbol, isFuturesListed, verificationDetails),
+  checkFuturesStatusWithVerification: (symbol, name) => tokenInfoService.checkFuturesStatusWithVerification(symbol, name)
 }; 
