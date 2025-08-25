@@ -401,6 +401,12 @@ class TokenInfoService {
     try {
       console.log('🔄 Fetching Alpha tokens with smart cache...');
       
+      // Auto-sync with API first (optional - can be disabled)
+      if (process.env.AUTO_SYNC_ALPHA_TOKENS === 'true') {
+        console.log('🔄 Auto-syncing alpha tokens with API...');
+        await this.syncAlphaTokensWithAPI();
+      }
+      
       // Get all available tokens from Binance Alpha API with complete data
       const availableTokens = await this.getAllAlphaTokensFromAPI();
       console.log(`📊 Found ${availableTokens.length} Alpha tokens with complete data`);
@@ -505,24 +511,11 @@ class TokenInfoService {
           // Process batch concurrently
           const batchPromises = batch.map(async (token) => {
             try {
-              // Check futures status with double verification if name is available
-              let futuresData;
-              if (token.name) {
-                console.log(`🔍 Using enhanced verification for ${token.symbol} (${token.name})`);
-                futuresData = await this.checkFuturesStatusWithVerification(token.symbol, token.name);
-              } else {
-                console.log(`⚠️ No name available for ${token.symbol}, using basic check`);
-                futuresData = await this.checkBasicFuturesStatus(token.symbol);
-              }
+              // Simple futures check
+              const futuresData = await binanceService.checkFuturesAvailability(token.symbol);
               
               // Save to database for future cache
-              if (futuresData.verificationStatus) {
-                // Enhanced verification result
-                await this.saveFuturesStatusWithVerification(token.symbol, futuresData.isAvailable, futuresData.verificationDetails);
-              } else {
-                // Basic check result
-                await this.saveFuturesStatus(token.symbol, futuresData.isAvailable);
-              }
+              await this.saveFuturesStatus(token.symbol, futuresData.isAvailable);
               
               return {
                 ...token,
@@ -896,147 +889,36 @@ class TokenInfoService {
   // Enhanced futures checking with double verification
   async checkFuturesStatusWithVerification(symbol, name) {
     try {
-      console.log(`🔍 Starting enhanced futures check for ${symbol} (${name})...`);
+      console.log(`🔍 Starting futures check for ${symbol}...`);
       
       // Clean symbol by removing $ prefix if present
       const cleanSymbol = symbol.replace(/^\$/, '');
       console.log(`🧹 Cleaned symbol: ${symbol} -> ${cleanSymbol}`);
       
-      // Get alpha token from database (try both with and without $)
-      let alphaToken = await this.getAlphaTokenFromDB(cleanSymbol);
-      if (!alphaToken && symbol !== cleanSymbol) {
-        alphaToken = await this.getAlphaTokenFromDB(symbol);
-      }
-      
-      if (!alphaToken) {
-        console.log(`❌ Alpha token not found for ${symbol} or ${cleanSymbol}`);
-        return {
-          isAvailable: false,
-          verificationStatus: 'NO_ALPHA_TOKEN',
-          reason: 'Token not found in alpha_tokens table',
-          attemptedSymbols: [symbol, cleanSymbol]
-        };
-      }
-      
-      console.log(`✅ Found alpha token: ${alphaToken.symbol} | ${alphaToken.name}`);
-      
-      // Check Binance Futures API with cleaned symbol
+      // Simple check: just call Binance Futures API
       const futuresData = await binanceService.checkFuturesAvailability(cleanSymbol);
       
-      // Double verification logic
-      const symbolMatch = alphaToken.symbol === cleanSymbol || alphaToken.symbol === symbol;
-      const nameMatch = alphaToken.name && 
-                       alphaToken.name.toLowerCase() === name.toLowerCase();
-      
-      console.log(`🔍 Verification results for ${symbol}:`);
-      console.log(`  - Alpha token: ${alphaToken.symbol} | ${alphaToken.name}`);
-      console.log(`  - Requested: ${symbol} | ${name}`);
-      console.log(`  - Cleaned symbol: ${cleanSymbol}`);
-      console.log(`  - Symbol match: ${symbolMatch}`);
-      console.log(`  - Name match: ${nameMatch}`);
+      console.log(`🔍 Futures check for ${symbol}:`);
+      console.log(`  - Symbol: ${symbol}`);
+      console.log(`  - Cleaned: ${cleanSymbol}`);
       console.log(`  - Futures API: ${futuresData.isAvailable}`);
       
-      // Enhanced verification: Check if this is likely the same token
-      let isLikelySameToken = symbolMatch;
+      // Save futures status
+      await this.saveFuturesStatusWithVerification(cleanSymbol, futuresData.isAvailable, {
+        symbol: symbol,
+        cleanedSymbol: cleanSymbol,
+        futuresApiStatus: futuresData.isAvailable,
+        verificationMode: 'SIMPLE'
+      });
       
-      // If name doesn't match but symbol does, this might be a different token with same symbol
-      if (symbolMatch && !nameMatch) {
-        console.log(`⚠️ Symbol matches but name doesn't - potential different token`);
-        console.log(`   Alpha: ${alphaToken.name} vs Requested: ${name}`);
-        
-        // Additional check: if futures is available, this might be a different RIF token
-        if (futuresData.isAvailable) {
-          console.log(`⚠️ WARNING: Futures available but name mismatch - likely different token!`);
-          isLikelySameToken = false;
-        }
-      }
-      
-      // Adjusted verification logic: 
-      // 1. If name is available, require both symbol and name match
-      // 2. If name is not available, only require symbol match
-      // 3. Always require futures API to confirm availability
-      let verificationPassed = false;
-      
-      if (name && alphaToken.name) {
-        // Both names available - require strict matching
-        verificationPassed = symbolMatch && nameMatch && futuresData.isAvailable;
-        console.log(`🔍 Strict verification: Symbol(${symbolMatch}) + Name(${nameMatch}) + Futures(${futuresData.isAvailable}) = ${verificationPassed}`);
-      } else {
-        // Name not available - only require symbol match
-        verificationPassed = symbolMatch && futuresData.isAvailable;
-        console.log(`🔍 Relaxed verification: Symbol(${symbolMatch}) + Futures(${futuresData.isAvailable}) = ${verificationPassed}`);
-        console.log(`   Note: Name verification skipped (Alpha: ${!!alphaToken.name}, Requested: ${!!name})`);
-      }
-      
-      // Only confirm if verification passed
-      if (verificationPassed) {
-        console.log(`✅ Double verification PASSED for ${symbol}`);
-        
-        // Save verified futures status
-        await this.saveFuturesStatusWithVerification(cleanSymbol, true, {
-          symbolMatch,
-          nameMatch,
-          alphaTokenSymbol: alphaToken.symbol,
-          alphaTokenName: alphaToken.name,
-          originalSymbol: symbol,
-          cleanedSymbol: cleanSymbol,
-          isLikelySameToken,
-          verificationMode: name && alphaToken.name ? 'STRICT' : 'RELAXED'
-        });
-        
-        return {
-          isAvailable: true,
-          verificationStatus: 'VERIFIED',
-          alphaTokenName: alphaToken.name,
-          futuresApiStatus: futuresData.isAvailable,
-          verificationDetails: {
-            symbolMatch,
-            nameMatch,
-            alphaTokenSymbol: alphaToken.symbol,
-            alphaTokenName: alphaToken.name,
-            originalSymbol: symbol,
-            cleanedSymbol: cleanSymbol,
-            isLikelySameToken,
-            verificationMode: name && alphaToken.name ? 'STRICT' : 'RELAXED'
-          }
-        };
-      } else {
-        console.log(`❌ Double verification FAILED for ${symbol}`);
-        
-        // Save failed verification status
-        await this.saveFuturesStatusWithVerification(cleanSymbol, false, {
-          symbolMatch,
-          nameMatch,
-          alphaTokenSymbol: alphaToken.symbol,
-          alphaTokenName: alphaToken.name,
-          originalSymbol: symbol,
-          cleanedSymbol: cleanSymbol,
-          isLikelySameToken,
-          reason: `Verification failed - Symbol: ${symbolMatch}, Name: ${nameMatch}, Futures: ${futuresData.isAvailable}, Same token: ${isLikelySameToken}`,
-          verificationMode: name && alphaToken.name ? 'STRICT' : 'RELAXED'
-        });
-        
-        return {
-          isAvailable: false,
-          verificationStatus: 'FAILED',
-          reason: `Verification failed - Symbol: ${symbolMatch}, Name: ${nameMatch}, Futures: ${futuresData.isAvailable}, Same token: ${isLikelySameToken}`,
-          alphaTokenName: alphaToken.name,
-          futuresApiStatus: futuresData.isAvailable,
-          verificationDetails: {
-            symbolMatch,
-            nameMatch,
-            alphaTokenSymbol: alphaToken.symbol,
-            alphaTokenName: alphaToken.name,
-            originalSymbol: symbol,
-            cleanedSymbol: cleanSymbol,
-            isLikelySameToken,
-            verificationMode: name && alphaToken.name ? 'STRICT' : 'RELAXED'
-          }
-        };
-      }
+      return {
+        isAvailable: futuresData.isAvailable,
+        verificationStatus: 'COMPLETED',
+        futuresApiStatus: futuresData.isAvailable
+      };
       
     } catch (error) {
-      console.error(`❌ Error in enhanced futures check for ${symbol}:`, error.message);
+      console.error(`❌ Error in futures check for ${symbol}:`, error.message);
       return {
         isAvailable: false,
         verificationStatus: 'ERROR',
@@ -1073,58 +955,82 @@ class TokenInfoService {
 
   // Enhanced function to get alpha token from database
   async getAlphaTokenFromDB(symbol) {
-    return new Promise((resolve, reject) => {
+    // This function is no longer needed - removed
+    return null;
+  }
+
+  // Sync alpha tokens with API to keep database up-to-date
+  async syncAlphaTokensWithAPI() {
+    try {
+      console.log('🔄 Starting alpha tokens sync with API...');
+      
+      // Get current tokens from API
+      const apiTokens = await this.getAllAlphaTokensFromAPI();
+      console.log(`📊 API returned ${apiTokens.length} tokens`);
+      
+      // Get current tokens from database
+      const dbTokens = await this.getAllAlphaTokens();
+      console.log(`💾 Database has ${dbTokens.length} tokens`);
+      
       const database = getDatabase();
       
-      // Try multiple search strategies
-      const queries = [
-        // Exact match
-        `SELECT symbol, name, is_futures_listed, futures_check_date, created_at
-         FROM alpha_tokens 
-         WHERE symbol = ? AND is_active = 1`,
-        
-        // Case insensitive match
-        `SELECT symbol, name, is_futures_listed, futures_check_date, created_at
-         FROM alpha_tokens 
-         WHERE UPPER(symbol) = UPPER(?) AND is_active = 1`,
-        
-        // Partial match (for cases where symbol might be truncated)
-        `SELECT symbol, name, is_futures_listed, futures_check_date, created_at
-         FROM alpha_tokens 
-         WHERE symbol LIKE ? AND is_active = 1`
-      ];
+      // Create sets for easy comparison
+      const apiSymbols = new Set(apiTokens.map(t => t.symbol));
+      const dbSymbols = new Set(dbTokens.map(t => t.symbol));
       
-      const searchTerms = [symbol, symbol, `%${symbol}%`];
+      // Find tokens to add (new in API, not in DB)
+      const tokensToAdd = apiTokens.filter(token => !dbSymbols.has(token.symbol));
+      console.log(`➕ Found ${tokensToAdd.length} new tokens to add`);
       
-      // Try each query strategy
-      const tryQuery = (index) => {
-        if (index >= queries.length) {
-          console.log(`❌ Alpha token not found after trying all strategies: ${symbol}`);
-          resolve(null);
-          return;
+      // Find tokens to remove (in DB, not in API - delisted)
+      const tokensToRemove = dbTokens.filter(token => !apiSymbols.has(token.symbol));
+      console.log(`➖ Found ${tokensToRemove.length} delisted tokens to remove`);
+      
+      // Add new tokens
+      if (tokensToAdd.length > 0) {
+        console.log('📝 Adding new tokens to database...');
+        for (const token of tokensToAdd) {
+          await this.addAlphaToken(token.symbol, 0, `Auto-added from API sync`);
+          console.log(`✅ Added: ${token.symbol}`);
         }
-        
-        database.get(queries[index], [searchTerms[index]], (err, row) => {
-          if (err) {
-            console.error(`❌ Database error with query ${index + 1} for ${symbol}:`, err.message);
-            // Try next strategy
-            tryQuery(index + 1);
-            return;
-          }
-          
-          if (row) {
-            console.log(`✅ Found alpha token with strategy ${index + 1}: ${row.symbol} | ${row.name}`);
-            resolve(row);
-          } else {
-            // Try next strategy
-            tryQuery(index + 1);
-          }
-        });
+      }
+      
+      // Remove delisted tokens
+      if (tokensToRemove.length > 0) {
+        console.log('🗑️ Removing delisted tokens from database...');
+        for (const token of tokensToRemove) {
+          await this.removeAlphaToken(token.symbol);
+          console.log(`✅ Removed: ${token.symbol}`);
+        }
+      }
+      
+      // Update existing tokens if needed
+      const tokensToUpdate = apiTokens.filter(token => dbSymbols.has(token.symbol));
+      console.log(`🔄 Updating ${tokensToUpdate.length} existing tokens...`);
+      
+      for (const token of tokensToUpdate) {
+        await this.updateTokenInfo(token.symbol, database);
+      }
+      
+      console.log(`🎯 Sync completed: +${tokensToAdd.length} added, -${tokensToRemove.length} removed, ${tokensToUpdate.length} updated`);
+      
+      return {
+        added: tokensToAdd.length,
+        removed: tokensToRemove.length,
+        updated: tokensToUpdate.length,
+        total: apiTokens.length
       };
       
-      // Start with first strategy
-      tryQuery(0);
-    });
+    } catch (error) {
+      console.error('❌ Error in alpha tokens sync:', error.message);
+      return {
+        added: 0,
+        removed: 0,
+        updated: 0,
+        total: 0,
+        error: error.message
+      };
+    }
   }
 }
 
@@ -1145,5 +1051,6 @@ module.exports = {
   getTokenLiveData: (symbol) => tokenInfoService.getTokenLiveData(symbol),
   saveFuturesStatus: (symbol, isFuturesListed) => tokenInfoService.saveFuturesStatus(symbol, isFuturesListed),
   saveFuturesStatusWithVerification: (symbol, isFuturesListed, verificationDetails) => tokenInfoService.saveFuturesStatusWithVerification(symbol, isFuturesListed, verificationDetails),
-  checkFuturesStatusWithVerification: (symbol, name) => tokenInfoService.checkFuturesStatusWithVerification(symbol, name)
+  checkFuturesStatusWithVerification: (symbol, name) => tokenInfoService.checkFuturesStatusWithVerification(symbol, name),
+  syncAlphaTokensWithAPI: () => tokenInfoService.syncAlphaTokensWithAPI()
 }; 
